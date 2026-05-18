@@ -1,0 +1,20 @@
+.nanogpt-billing-display {
+    margin-top: 4px;
+    font-size: 0.78em;
+    line-height: 1.25;
+    color: var(--SmartThemeEmColor);
+    opacity: 0.9;
+    max-width: 100%;
+}
+
+.nanogpt-billing-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nanogpt-billing-warning {
+    display: block;
+    margin-top: 6px;
+    color: var(--warning);
+}

@@ -1,0 +1,14 @@
+{
+    "display_name": "NanoGPT Billing",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Gregory Bartell",
+    "version": "0.1.0",
+    "homePage": "https://github.com/gregbartell/SillyTavern-NanoGPT-Billing",
+    "hooks": {
+        "activate": "init"
+    }
+}
