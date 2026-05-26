@@ -13,7 +13,11 @@
     white-space: nowrap;
 }
 
-.nanogpt-billing-warning {
+.nanogpt-billing-warning[hidden] {
+    display: none;
+}
+
+.nanogpt-billing-warning:not([hidden]) {
     display: block;
     margin-top: 6px;
     color: var(--warning);
