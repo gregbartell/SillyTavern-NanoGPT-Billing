@@ -1,12 +1,14 @@
 import {
-    createNanoGptBillingEntryFromMetadata,
-    formatNanoGptBillingDisplay,
-    mergeNanoGptBillingMetadata,
+    createBillingEntryFromMetadata,
+    formatBillingDisplay,
+    mergeBillingMetadata,
 } from './billing.js';
 
-const SETTINGS_KEY = 'nanogptBilling';
+const SETTINGS_KEY = 'chatCompletionBilling';
+const LEGACY_SETTINGS_KEY = 'nanogptBilling';
 const EVENT_NAME = 'CHAT_COMPLETION_RESPONSE_METADATA';
 const APPEND_TYPES = new Set(['append', 'continue', 'appendFinal']);
+const DISPLAY_SELECTOR = '.chat-completion-billing-display, .nanogpt-billing-display';
 
 let initialized = false;
 
@@ -16,8 +18,9 @@ function getContext() {
 
 function getSettings() {
     const context = getContext();
+    const legacySettings = context.extensionSettings[LEGACY_SETTINGS_KEY];
     context.extensionSettings[SETTINGS_KEY] ??= {
-        enabled: true,
+        enabled: legacySettings?.enabled ?? true,
     };
     context.extensionSettings[SETTINGS_KEY].enabled ??= true;
     return context.extensionSettings[SETTINGS_KEY];
@@ -39,6 +42,7 @@ async function renderSettings() {
         return;
     }
 
+    document.querySelector('#chat-completion-billing-settings')?.remove();
     document.querySelector('#nanogpt-billing-settings')?.remove();
 
     const response = await fetch(new URL('./settings.html', import.meta.url));
@@ -46,8 +50,8 @@ async function renderSettings() {
     template.innerHTML = await response.text();
     container.append(template.content.cloneNode(true));
 
-    const checkbox = document.querySelector('#nanogpt_billing_enabled');
-    const warning = document.querySelector('#nanogpt_billing_warning');
+    const checkbox = document.querySelector('#chat_completion_billing_enabled');
+    const warning = document.querySelector('#chat_completion_billing_warning');
 
     checkbox.checked = !!settings.enabled;
     warning.hidden = isMetadataHookAvailable(context);
@@ -66,10 +70,16 @@ function getMessageBillingMetadata(message) {
 
     const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : null;
     const swipeMetadata = swipeId !== null
-        ? message.swipe_info?.[swipeId]?.extra?.extensions?.[SETTINGS_KEY]
+        ? getStoredBillingMetadata(message.swipe_info?.[swipeId]?.extra)
         : null;
 
-    return swipeMetadata ?? message.extra?.extensions?.[SETTINGS_KEY] ?? null;
+    return swipeMetadata ?? getStoredBillingMetadata(message.extra);
+}
+
+function getStoredBillingMetadata(extra) {
+    return extra?.extensions?.[SETTINGS_KEY]
+        ?? extra?.extensions?.[LEGACY_SETTINGS_KEY]
+        ?? null;
 }
 
 function ensureExtensionExtra(extra) {
@@ -97,8 +107,8 @@ function persistBillingMetadata(payload, request) {
     message.extra ??= {};
     const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : payload.swipeId;
     const swipeInfo = Number.isInteger(swipeId) ? message.swipe_info?.[swipeId] : null;
-    const existing = swipeInfo?.extra?.extensions?.[SETTINGS_KEY] ?? message.extra.extensions?.[SETTINGS_KEY];
-    const metadata = mergeNanoGptBillingMetadata(existing, request, { append: shouldAppendBilling(payload) });
+    const existing = getStoredBillingMetadata(swipeInfo?.extra) ?? getStoredBillingMetadata(message.extra);
+    const metadata = mergeBillingMetadata(existing, request, { append: shouldAppendBilling(payload) });
 
     if (!metadata) {
         return false;
@@ -119,7 +129,7 @@ function getMessageElement(messageId) {
 }
 
 function removeMessageDisplay(messageId) {
-    getMessageElement(messageId)?.querySelector('.nanogpt-billing-display')?.remove();
+    getMessageElement(messageId)?.querySelectorAll(DISPLAY_SELECTOR).forEach(node => node.remove());
 }
 
 function ensureMessageDisplay(messageId) {
@@ -129,11 +139,11 @@ function ensureMessageDisplay(messageId) {
         return null;
     }
 
-    let display = wrapper.querySelector('.nanogpt-billing-display');
+    let display = wrapper.querySelector('.chat-completion-billing-display');
     if (!display) {
         display = document.createElement('div');
-        display.className = 'nanogpt-billing-display';
-        display.innerHTML = '<div class="nanogpt-billing-line nanogpt-billing-total"></div>';
+        display.className = 'chat-completion-billing-display';
+        display.innerHTML = '<div class="chat-completion-billing-line chat-completion-billing-total"></div>';
         wrapper.append(display);
     }
 
@@ -150,14 +160,14 @@ function renderMessageBilling(messageId) {
         return;
     }
 
-    const formatted = formatNanoGptBillingDisplay(getMessageBillingMetadata(message));
+    const formatted = formatBillingDisplay(getMessageBillingMetadata(message));
     if (!formatted) {
         removeMessageDisplay(messageId);
         return;
     }
 
     const display = ensureMessageDisplay(messageId);
-    const totalLine = display?.querySelector('.nanogpt-billing-total');
+    const totalLine = display?.querySelector('.chat-completion-billing-total');
     if (!totalLine) {
         return;
     }
@@ -173,7 +183,7 @@ function renderVisibleMessages() {
     }
 
     if (!getSettings().enabled) {
-        document.querySelectorAll('.nanogpt-billing-display').forEach(node => node.remove());
+        document.querySelectorAll(DISPLAY_SELECTOR).forEach(node => node.remove());
         return;
     }
 
@@ -193,11 +203,11 @@ async function onChatCompletionResponseMetadata(payload) {
     const context = getContext();
     const settings = getSettings();
 
-    if (!settings.enabled || payload?.chatCompletionSource !== 'nanogpt') {
+    if (!settings.enabled) {
         return;
     }
 
-    const request = createNanoGptBillingEntryFromMetadata(payload);
+    const request = createBillingEntryFromMetadata(payload);
     if (!request || !persistBillingMetadata(payload, request)) {
         return;
     }
@@ -214,7 +224,7 @@ export async function init() {
 
     const context = getContext();
     if (!context) {
-        console.warn('NanoGPT Billing: SillyTavern context is unavailable.');
+        console.warn('Chat Completion Billing: SillyTavern context is unavailable.');
         return;
     }
 
@@ -227,7 +237,7 @@ export async function init() {
     context.eventSource.on(context.eventTypes.CHARACTER_MESSAGE_RENDERED, messageId => renderMessageBilling(messageId));
     context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, messageId => renderMessageBilling(messageId));
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => {
-        document.querySelectorAll('.nanogpt-billing-display').forEach(node => node.remove());
+        document.querySelectorAll(DISPLAY_SELECTOR).forEach(node => node.remove());
         queueRenderVisibleMessages();
     });
     context.eventSource.on(context.eventTypes.MORE_MESSAGES_LOADED, queueRenderVisibleMessages);

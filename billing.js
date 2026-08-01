@@ -2,6 +2,8 @@ const MAX_STRING_LENGTH = 256;
 const MAX_ARRAY_LENGTH = 32;
 const MAX_OBJECT_DEPTH = 4;
 const SENSITIVE_KEY_PATTERN = /(?:account|team|payment|invoice|customer|email|api[_-]?key|secret|credential|wallet|balance|credit|subscription|organization|org_id)/i;
+const SOURCE_NANOGPT = 'nanogpt';
+const SOURCE_OPENROUTER = 'openrouter';
 
 const TOTAL_COST_PATHS = [
     'amount',
@@ -48,7 +50,9 @@ const CACHE_WRITE_TOKEN_PATHS = [
     'cache_creation_tokens',
     'cache_creation_input_tokens',
     'prompt_tokens_details.cache_creation_tokens',
+    'prompt_tokens_details.cache_write_tokens',
     'input_tokens_details.cache_creation_tokens',
+    'input_tokens_details.cache_write_tokens',
 ];
 
 const PROVIDER_PATHS = [
@@ -133,7 +137,7 @@ function isUsdPricing(pricing) {
     return !currency || currency.toUpperCase() === 'USD';
 }
 
-function sanitizeNanoGptMetadata(value, depth = 0) {
+function sanitizeBillingMetadata(value, depth = 0) {
     if (value === null || typeof value === 'boolean') {
         return value;
     }
@@ -153,7 +157,7 @@ function sanitizeNanoGptMetadata(value, depth = 0) {
     if (Array.isArray(value)) {
         return value
             .slice(0, MAX_ARRAY_LENGTH)
-            .map(item => sanitizeNanoGptMetadata(item, depth + 1))
+            .map(item => sanitizeBillingMetadata(item, depth + 1))
             .filter(item => item !== undefined);
     }
 
@@ -165,7 +169,7 @@ function sanitizeNanoGptMetadata(value, depth = 0) {
                 continue;
             }
 
-            const sanitizedItem = sanitizeNanoGptMetadata(item, depth + 1);
+            const sanitizedItem = sanitizeBillingMetadata(item, depth + 1);
             if (sanitizedItem !== undefined) {
                 sanitized[key] = sanitizedItem;
             }
@@ -177,18 +181,7 @@ function sanitizeNanoGptMetadata(value, depth = 0) {
     return undefined;
 }
 
-function extractProviderModel(payload, pricing) {
-    return {
-        provider: toDisplayString(pickValue(pricing, PROVIDER_PATHS) ?? payload.provider ?? 'Auto'),
-        model: toDisplayString(pickValue(pricing, MODEL_PATHS) ?? payload.model),
-    };
-}
-
-export function createNanoGptBillingEntryFromMetadata(payload) {
-    const usage = payload?.usage;
-    const pricing = payload?.providerMetadata?.x_nanogpt_pricing;
-    const cache = payload?.providerMetadata?.x_nanogpt_cache;
-
+function createBillingRequest({ source, payload, pricing, usage, cache, provider, model }) {
     if (!isPlainObject(payload) || !isPlainObject(usage) || !isPlainObject(pricing)) {
         return null;
     }
@@ -201,18 +194,18 @@ export function createNanoGptBillingEntryFromMetadata(payload) {
         return null;
     }
 
-    const sanitizedPricing = sanitizeNanoGptMetadata(pricing);
-    const sanitizedUsage = sanitizeNanoGptMetadata(usage);
-    const sanitizedCache = isPlainObject(cache) ? sanitizeNanoGptMetadata(cache) : undefined;
+    const sanitizedPricing = sanitizeBillingMetadata(pricing);
+    const sanitizedUsage = sanitizeBillingMetadata(usage);
+    const sanitizedCache = isPlainObject(cache) ? sanitizeBillingMetadata(cache) : undefined;
 
     if (!isPlainObject(sanitizedPricing) || !isPlainObject(sanitizedUsage)) {
         return null;
     }
 
-    const { provider, model } = extractProviderModel(payload, pricing);
     const request = {
-        provider,
-        model,
+        source,
+        provider: toDisplayString(provider),
+        model: toDisplayString(model),
         pricing: sanitizedPricing,
         usage: sanitizedUsage,
         ...(isPlainObject(sanitizedCache) ? { cache: sanitizedCache } : {}),
@@ -220,10 +213,82 @@ export function createNanoGptBillingEntryFromMetadata(payload) {
         type: typeof payload.originalType === 'string' && payload.originalType ? payload.originalType : payload.type,
     };
 
-    return sanitizeNanoGptBillingRequest(request);
+    return sanitizeBillingRequest(request);
 }
 
-export function sanitizeNanoGptBillingRequest(request) {
+function createNanoGptBillingRequest(payload) {
+    const usage = payload?.usage;
+    const pricing = payload?.providerMetadata?.x_nanogpt_pricing;
+    const cache = payload?.providerMetadata?.x_nanogpt_cache;
+
+    return createBillingRequest({
+        source: SOURCE_NANOGPT,
+        payload,
+        pricing,
+        usage,
+        cache,
+        provider: pickValue(pricing, PROVIDER_PATHS) ?? payload?.provider ?? 'Auto',
+        model: pickValue(pricing, MODEL_PATHS) ?? payload?.model,
+    });
+}
+
+function getSelectedOpenRouterEndpoint(routingMetadata) {
+    const available = routingMetadata?.endpoints?.available;
+    if (Array.isArray(available)) {
+        const selected = available.find(endpoint => isPlainObject(endpoint) && endpoint.selected === true);
+        if (selected) {
+            return selected;
+        }
+    }
+
+    const attempts = routingMetadata?.attempts;
+    if (Array.isArray(attempts)) {
+        for (let index = attempts.length - 1; index >= 0; index--) {
+            const attempt = attempts[index];
+            if (isPlainObject(attempt) && Number(attempt.status) >= 200 && Number(attempt.status) < 300) {
+                return attempt;
+            }
+        }
+    }
+
+    return undefined;
+}
+
+function createOpenRouterBillingRequest(payload) {
+    const usage = payload?.usage;
+    const routingMetadata = payload?.providerMetadata?.openrouter_metadata;
+    const selectedEndpoint = getSelectedOpenRouterEndpoint(routingMetadata);
+    const pricing = {
+        cost: usage?.cost,
+        currency: 'USD',
+        ...(isPlainObject(usage?.cost_details) ? { cost_details: usage.cost_details } : {}),
+    };
+
+    return createBillingRequest({
+        source: SOURCE_OPENROUTER,
+        payload,
+        pricing,
+        usage,
+        provider: selectedEndpoint?.provider ?? 'OpenRouter',
+        model: selectedEndpoint?.model ?? payload?.model,
+    });
+}
+
+const BILLING_ADAPTERS = new Map([
+    [SOURCE_NANOGPT, createNanoGptBillingRequest],
+    [SOURCE_OPENROUTER, createOpenRouterBillingRequest],
+]);
+
+export function createBillingEntryFromMetadata(payload) {
+    if (!isPlainObject(payload)) {
+        return null;
+    }
+
+    const adapter = BILLING_ADAPTERS.get(payload.chatCompletionSource);
+    return adapter?.(payload) ?? null;
+}
+
+function sanitizeBillingRequest(request) {
     if (!isPlainObject(request) || !isPlainObject(request.pricing) || !isPlainObject(request.usage)) {
         return null;
     }
@@ -236,9 +301,9 @@ export function sanitizeNanoGptBillingRequest(request) {
         return null;
     }
 
-    const pricing = sanitizeNanoGptMetadata(request.pricing);
-    const usage = sanitizeNanoGptMetadata(request.usage);
-    const cache = isPlainObject(request.cache) ? sanitizeNanoGptMetadata(request.cache) : undefined;
+    const pricing = sanitizeBillingMetadata(request.pricing);
+    const usage = sanitizeBillingMetadata(request.usage);
+    const cache = isPlainObject(request.cache) ? sanitizeBillingMetadata(request.cache) : undefined;
 
     if (!isPlainObject(pricing) || !isPlainObject(usage)) {
         return null;
@@ -247,6 +312,7 @@ export function sanitizeNanoGptBillingRequest(request) {
     const createdAt = toTokenCount(request.created_at) ?? Date.now();
 
     return {
+        source: toDisplayString(request.source),
         provider: toDisplayString(request.provider),
         model: toDisplayString(request.model),
         pricing,
@@ -257,14 +323,14 @@ export function sanitizeNanoGptBillingRequest(request) {
     };
 }
 
-export function mergeNanoGptBillingMetadata(existing, request, { append = false } = {}) {
-    const sanitizedRequest = sanitizeNanoGptBillingRequest(request);
+export function mergeBillingMetadata(existing, request, { append = false } = {}) {
+    const sanitizedRequest = sanitizeBillingRequest(request);
     if (!sanitizedRequest) {
         return undefined;
     }
 
     const existingRequests = append && isPlainObject(existing) && Array.isArray(existing.requests)
-        ? existing.requests.map(sanitizeNanoGptBillingRequest).filter(Boolean)
+        ? existing.requests.map(sanitizeBillingRequest).filter(Boolean)
         : [];
     const incomplete = append && isPlainObject(existing) && existing.incomplete === true;
 
@@ -275,7 +341,7 @@ export function mergeNanoGptBillingMetadata(existing, request, { append = false 
     };
 }
 
-function formatNanoGptUsd(value) {
+function formatUsd(value) {
     return `$${Number(value).toFixed(6)}`;
 }
 
@@ -298,7 +364,7 @@ function getRequestMetrics(request) {
     };
 }
 
-export function accumulateNanoGptBilling(metadata) {
+function accumulateBilling(metadata) {
     if (!isPlainObject(metadata) || !Array.isArray(metadata.requests)) {
         return null;
     }
@@ -307,7 +373,7 @@ export function accumulateNanoGptBilling(metadata) {
         return null;
     }
 
-    const requests = metadata.requests.map(sanitizeNanoGptBillingRequest).filter(Boolean);
+    const requests = metadata.requests.map(sanitizeBillingRequest).filter(Boolean);
     if (!requests.length) {
         return null;
     }
@@ -353,8 +419,8 @@ export function accumulateNanoGptBilling(metadata) {
     return summary;
 }
 
-export function formatNanoGptBillingDisplay(metadata) {
-    const summary = accumulateNanoGptBilling(metadata);
+export function formatBillingDisplay(metadata) {
+    const summary = accumulateBilling(metadata);
     if (!summary) {
         return null;
     }
@@ -368,8 +434,8 @@ export function formatNanoGptBillingDisplay(metadata) {
     }
 
     return {
-        totalCost: formatNanoGptUsd(summary.totalCost),
-        cacheCost: hasCacheCost ? formatNanoGptUsd(summary.cacheCost) : null,
+        totalCost: formatUsd(summary.totalCost),
+        cacheCost: hasCacheCost ? formatUsd(summary.cacheCost) : null,
         title: title.join(' '),
     };
 }

@@ -1,4 +1,4 @@
-.nanogpt-billing-display {
+.chat-completion-billing-display {
     margin-top: 4px;
     font-size: 0.78em;
     line-height: 1.25;
@@ -7,17 +7,17 @@
     max-width: 100%;
 }
 
-.nanogpt-billing-line {
+.chat-completion-billing-line {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.nanogpt-billing-warning[hidden] {
+.chat-completion-billing-warning[hidden] {
     display: none;
 }
 
-.nanogpt-billing-warning:not([hidden]) {
+.chat-completion-billing-warning:not([hidden]) {
     display: block;
     margin-top: 6px;
     color: var(--warning);

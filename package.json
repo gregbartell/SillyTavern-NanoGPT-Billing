@@ -1,6 +1,6 @@
 {
-    "name": "sillytavern-nanogpt-billing",
-    "version": "0.1.0",
+    "name": "sillytavern-chat-completion-billing",
+    "version": "0.2.0",
     "type": "module",
     "private": true,
     "scripts": {
