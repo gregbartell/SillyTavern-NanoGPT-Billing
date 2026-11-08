@@ -6,15 +6,15 @@ Displays exact provider-reported per-message costs when SillyTavern exposes the 
 
 This extension depends on currently unmerged SillyTavern core changes. It will not work with upstream SillyTavern until the core metadata hook lands.
 
-The local `feat/openrouter-message-cost` branch in Gregory Bartell's SillyTavern
-checkout provides a minimal OpenRouter billing hook on current upstream staging.
+The [`feat/openrouter-message-cost` branch](https://github.com/gregbartell/SillyTavern/tree/feat/openrouter-message-cost)
+in Gregory Bartell's SillyTavern fork provides a minimal OpenRouter billing hook
+based on upstream staging.
 Other saved responses signal absent billing data so an unpriced continuation
 cannot retain an old complete total.
-Use this extension checkout (version 0.2.1) with that branch. These local changes
-have not been pushed.
+Use this extension (version 0.2.1 or later) with that core branch.
 
-The older `poc/nanogpt-response-metadata` branch remains compatible and also
-provides NanoGPT metadata.
+The older [`poc/nanogpt-response-metadata` branch](https://github.com/gregbartell/SillyTavern/tree/poc/nanogpt-response-metadata)
+remains compatible and also provides NanoGPT metadata.
 
 Supported providers:
 
@@ -35,6 +35,19 @@ calls, background requests, or other swipes.
 
 - SillyTavern with `CHAT_COMPLETION_RESPONSE_METADATA` support, as described above.
 - NanoGPT responses that include `x_nanogpt_pricing`, or OpenRouter responses that include `usage.cost`.
+
+## Installation and updates
+
+In SillyTavern, open **Extensions → Install extension** and use:
+
+```text
+https://github.com/gregbartell/SillyTavern-NanoGPT-Billing
+```
+
+The default `main` branch includes OpenRouter support. If already installed,
+update the extension and reload SillyTavern. The extension appears as
+**Chat Completion Billing**, despite the repository's historical NanoGPT name.
+The compatible SillyTavern core branch described above is still required.
 
 ## Development
 
