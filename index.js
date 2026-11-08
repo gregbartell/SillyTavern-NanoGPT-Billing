@@ -105,16 +105,19 @@ function persistBillingMetadata(payload, request) {
     }
 
     message.extra ??= {};
-    const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : payload.swipeId;
+    const swipeId = Number.isInteger(payload.swipeId) ? payload.swipeId : message.swipe_id;
+    const isActiveSwipe = swipeId === message.swipe_id;
     const swipeInfo = Number.isInteger(swipeId) ? message.swipe_info?.[swipeId] : null;
-    const existing = getStoredBillingMetadata(swipeInfo?.extra) ?? getStoredBillingMetadata(message.extra);
+    if (!isActiveSwipe && !swipeInfo) return false;
+    const existing = getStoredBillingMetadata(swipeInfo?.extra)
+        ?? (isActiveSwipe ? getStoredBillingMetadata(message.extra) : null);
     const metadata = mergeBillingMetadata(existing, request, { append: shouldAppendBilling(payload) });
 
     if (!metadata) {
         return false;
     }
 
-    ensureExtensionExtra(message.extra)[SETTINGS_KEY] = cloneMetadata(metadata);
+    if (isActiveSwipe) ensureExtensionExtra(message.extra)[SETTINGS_KEY] = cloneMetadata(metadata);
 
     if (swipeInfo) {
         swipeInfo.extra ??= {};
@@ -160,8 +163,9 @@ function renderMessageBilling(messageId) {
         return;
     }
 
-    const formatted = formatBillingDisplay(getMessageBillingMetadata(message));
-    if (!formatted) {
+    const metadata = getMessageBillingMetadata(message);
+    const formatted = formatBillingDisplay(metadata);
+    if (!formatted && !metadata?.incomplete) {
         removeMessageDisplay(messageId);
         return;
     }
@@ -172,8 +176,10 @@ function renderMessageBilling(messageId) {
         return;
     }
 
-    totalLine.textContent = `cost: ${formatted.totalCost}${formatted.cacheCost ? ` cache: ${formatted.cacheCost}` : ''}`;
-    totalLine.title = formatted.title;
+    totalLine.textContent = formatted
+        ? `cost: ${formatted.totalCost}${formatted.cacheCost ? ` cache: ${formatted.cacheCost}` : ''}`
+        : 'cost: unavailable';
+    totalLine.title = formatted?.title ?? 'A complete provider-reported cost is unavailable for this message.';
 }
 
 function renderVisibleMessages() {
@@ -208,7 +214,9 @@ async function onChatCompletionResponseMetadata(payload) {
     }
 
     const request = createBillingEntryFromMetadata(payload);
-    if (!request || !persistBillingMetadata(payload, request)) {
+    if (!request && payload?.chatCompletionSource !== 'openrouter'
+        && !getMessageBillingMetadata(context.chat[payload?.messageId])) return;
+    if (!persistBillingMetadata(payload, request)) {
         return;
     }
 

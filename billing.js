@@ -325,18 +325,14 @@ function sanitizeBillingRequest(request) {
 
 export function mergeBillingMetadata(existing, request, { append = false } = {}) {
     const sanitizedRequest = sanitizeBillingRequest(request);
-    if (!sanitizedRequest) {
-        return undefined;
-    }
-
     const existingRequests = append && isPlainObject(existing) && Array.isArray(existing.requests)
         ? existing.requests.map(sanitizeBillingRequest).filter(Boolean)
         : [];
-    const incomplete = append && isPlainObject(existing) && existing.incomplete === true;
+    const incomplete = !sanitizedRequest || (append && (!existingRequests.length || existing?.incomplete === true));
 
     return {
         version: 1,
-        requests: [...existingRequests, sanitizedRequest],
+        requests: sanitizedRequest ? [...existingRequests, sanitizedRequest] : existingRequests,
         incomplete,
     };
 }

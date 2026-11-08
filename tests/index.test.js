@@ -32,6 +32,8 @@ test('reads legacy settings and appends OpenRouter billing into the provider-neu
         MESSAGE_SWIPED: 'message_swiped',
         CHAT_CHANGED: 'chat_changed',
         MORE_MESSAGES_LOADED: 'more_messages_loaded',
+        GENERATION_STARTED: 'generation_started',
+        GENERATION_ENDED: 'generation_ended',
     };
     const context = {
         chat: [message],
@@ -51,9 +53,13 @@ test('reads legacy settings and appends OpenRouter billing into the provider-neu
     };
 
     globalThis.SillyTavern = { getContext: () => context };
+    const totalLine = { textContent: '', title: '' };
+    const display = { querySelector: () => totalLine };
+    const wrapper = { querySelector: () => display };
+    const messageElement = { querySelector: () => wrapper, querySelectorAll: () => [] };
     globalThis.document = {
-        querySelector() {
-            return null;
+        querySelector(selector) {
+            return selector.startsWith('#chat .mes') ? messageElement : null;
         },
         querySelectorAll() {
             return [];
@@ -88,10 +94,51 @@ test('reads legacy settings and appends OpenRouter billing into the provider-neu
     });
 
     const stored = message.extra.extensions.chatCompletionBilling;
+    assert.equal(stored.incomplete, false);
     assert.equal(stored.requests.length, 2);
     assert.equal(stored.requests[0].pricing.cost, 0.000001);
     assert.equal(stored.requests[1].source, 'openrouter');
     assert.equal(stored.requests[1].pricing.cost, 0.000002);
     assert.deepEqual(message.swipe_info[0].extra.extensions.chatCompletionBilling, stored);
     assert.equal(saveCount, 1);
+    assert.equal(totalLine.textContent, 'cost: $0.000003');
+
+    // Missing usage after a continuation must invalidate both the live message
+    // and its persisted swipe, without touching other swipes.
+    message.swipe_info.push({ extra: { extensions: { chatCompletionBilling: structuredClone(stored) } } });
+    await metadataHandler({
+        messageId: 0, swipeId: 0, type: 'continue', originalType: 'continue',
+        chatCompletionSource: 'openrouter', model: 'openai/gpt-4o-mini', usage: null,
+    });
+    assert.equal(message.extra.extensions.chatCompletionBilling.incomplete, true);
+    assert.equal(message.swipe_info[0].extra.extensions.chatCompletionBilling.incomplete, true);
+    assert.equal(message.swipe_info[1].extra.extensions.chatCompletionBilling.incomplete, false);
+    assert.equal(saveCount, 2);
+    assert.equal(totalLine.textContent, 'cost: unavailable');
+
+    // A reloaded chat and swipe selection render the stored value, not a
+    // price recomputed from current provider settings.
+    context.chat = JSON.parse(JSON.stringify(context.chat));
+    context.chat[0].swipe_id = 1;
+    handlers.get(eventTypes.MESSAGE_SWIPED)(0);
+    assert.equal(totalLine.textContent, 'cost: $0.000003');
+    context.chat[0].swipe_id = 0;
+    handlers.get(eventTypes.CHARACTER_MESSAGE_RENDERED)(0);
+    assert.equal(totalLine.textContent, 'cost: unavailable');
+
+    // Saved responses from other APIs explicitly signal that no cost is known.
+    // Background generations have no saved message event and cannot affect this.
+    context.chat[0].swipe_id = 1;
+    context.chat[0].extra = structuredClone(context.chat[0].swipe_info[1].extra);
+    await metadataHandler({ messageId: 0, swipeId: 1, type: 'appendFinal', originalType: 'continue', usage: null, chatCompletionSource: null });
+    assert.equal(context.chat[0].extra.extensions.chatCompletionBilling.incomplete, true);
+    assert.equal(context.chat[0].swipe_info[1].extra.extensions.chatCompletionBilling.incomplete, true);
+    assert.equal(totalLine.textContent, 'cost: unavailable');
+
+    // Targeting an archived swipe must not overwrite the selected swipe.
+    context.chat[0].extra.extensions.chatCompletionBilling = structuredClone(stored);
+    context.chat[0].swipe_info[1].extra.extensions.chatCompletionBilling = structuredClone(stored);
+    await metadataHandler({ messageId: 0, swipeId: 0, type: 'continue', usage: null, chatCompletionSource: null });
+    assert.equal(context.chat[0].swipe_info[0].extra.extensions.chatCompletionBilling.incomplete, true);
+    assert.equal(context.chat[0].extra.extensions.chatCompletionBilling.incomplete, false);
 });

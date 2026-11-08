@@ -265,3 +265,29 @@ test('uses selected swipe metadata independently', () => {
     const selected = message.swipe_info[message.swipe_id].extra.extensions.nanogptBilling;
     assert.equal(formatBillingDisplay(selected).totalCost, '$0.000002');
 });
+
+
+test('missing charge invalidates a continuation total across reloads', () => {
+    const first = mergeBillingMetadata(undefined, createBillingEntryFromMetadata(makeOpenRouterPayload()));
+    const incomplete = mergeBillingMetadata(first, null, { append: true });
+    assert.equal(incomplete.incomplete, true);
+    assert.equal(incomplete.requests.length, 1);
+    assert.equal(formatBillingDisplay(JSON.parse(JSON.stringify(incomplete))), null);
+    const later = mergeBillingMetadata(incomplete, createBillingEntryFromMetadata(makeOpenRouterPayload()), { append: true });
+    assert.equal(formatBillingDisplay(later), null);
+});
+
+test('a continuation without a known original cost remains incomplete', () => {
+    const metadata = mergeBillingMetadata(undefined, createBillingEntryFromMetadata(makeOpenRouterPayload()), { append: true });
+    assert.equal(metadata.incomplete, true);
+    assert.equal(formatBillingDisplay(metadata), null);
+});
+
+test('a new swipe without usage never inherits the previous swipe price', () => {
+    const first = mergeBillingMetadata(undefined, createBillingEntryFromMetadata(makeOpenRouterPayload()));
+    const missing = mergeBillingMetadata(first, null);
+    assert.equal(missing.incomplete, true);
+    assert.deepEqual(missing.requests, []);
+    const free = mergeBillingMetadata(missing, createBillingEntryFromMetadata(makeOpenRouterPayload({ cost: 0 })));
+    assert.equal(formatBillingDisplay(free).totalCost, '$0.000000');
+});
